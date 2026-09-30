@@ -21,13 +21,14 @@ export async function matchCollection(formData: FormData) {
   const collectionId = textFrom(formData, "collection_id");
   const supabase = await createClient();
   await ensureOpenRun(supabase, runId);
-  const [{ data: collection, error: collectionError }, { data: tenant, error: tenantError }] = await Promise.all([
-    supabase.from("tenant_collections").select("id,amount,tenant_id,run_id").eq("id", collectionId).eq("run_id", runId).single(),
-    supabase.from("tenant_collections").select("tenants(expected_monthly)").eq("id", collectionId).single(),
-  ]);
+  const { data: collection, error: collectionError } = await supabase
+    .from("tenant_collections")
+    .select("id,amount,tenant_id,run_id,tenants(expected_monthly)")
+    .eq("id", collectionId)
+    .eq("run_id", runId)
+    .single();
   if (collectionError || !collection) throw new Error("Collection not found.");
-  if (tenantError) throw new Error(tenantError.message);
-  const tenantInfo = tenant?.tenants as unknown as { expected_monthly: number } | { expected_monthly: number }[] | null;
+  const tenantInfo = collection.tenants as unknown as { expected_monthly: number } | { expected_monthly: number }[] | null;
   const expected = Number((Array.isArray(tenantInfo) ? tenantInfo[0] : tenantInfo)?.expected_monthly ?? 0);
   if (expected <= 0) throw new Error("No expected amount set for tenant.");
   const status = collection.amount === expected ? "matched" : collection.amount < expected ? "short" : "excess";
@@ -86,6 +87,12 @@ export async function reconcileRun(formData: FormData) {
   const { error: totalsError } = await supabase.from("reconciliation_runs").update({ total_credit: totalCredit, total_debit: totalDebit, variance }).eq("id", runId);
   if (totalsError) throw new Error(totalsError.message);
   if (variance !== 0) throw new Error("Variance must be 0 before this run can be reconciled.");
+  const hasUnmatchedCollections = ledgerResult.collections.data?.some((row) => row.status !== "matched");
+  const hasUnclearedPayments = ledgerResult.payments.data?.some((row) => row.status !== "cleared");
+  const hasUnmatchedBankLines = bankLines.some((line) => line.status === "unmatched");
+  if (hasUnmatchedCollections || hasUnclearedPayments || hasUnmatchedBankLines) {
+    throw new Error("Match every collection and statement line, and clear every payment before reconciling.");
+  }
   const { error } = await supabase.from("reconciliation_runs").update({ status: "reconciled", closed_at: new Date().toISOString() }).eq("id", runId);
   if (error) throw new Error(error.message);
   await refresh(runId);
