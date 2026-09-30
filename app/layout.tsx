@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./ledgerflow.css";
 
 export const metadata: Metadata = {
   title: "Reconciliation · LedgerFlow",
