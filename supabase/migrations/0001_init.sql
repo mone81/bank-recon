@@ -1,5 +1,23 @@
+begin;
 -- CORE TABLES ONLY (vendors, tenants, bank_transactions, vendor_payments, tenant_collections, reconciliation_runs)
 -- Note: users/teams/memberships/activity_logs/audit_logs use platform tables (later sprint).
+
+create table if not exists reconciliation_runs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid,
+  period_month date not null,
+  total_credit numeric(12,2) not null default 0,
+  total_debit numeric(12,2) not null default 0,
+  variance numeric(12,2) not null default 0,
+  status text not null default 'open' check (status in ('open','reconciled','locked')),
+  closed_at timestamptz,
+  created_at timestamptz not null default now()
+);
+alter table reconciliation_runs enable row level security;
+drop policy if exists "reconciliation_runs_v1_read" on reconciliation_runs;
+create policy "reconciliation_runs_v1_read" on reconciliation_runs for select using (true);
+drop policy if exists "reconciliation_runs_v1_write" on reconciliation_runs;
+create policy "reconciliation_runs_v1_write" on reconciliation_runs for all using (true) with check (true);
 
 create table if not exists vendors (
   id uuid primary key default gen_random_uuid(),
@@ -83,27 +101,30 @@ create policy "tenant_collections_v1_read" on tenant_collections for select usin
 drop policy if exists "tenant_collections_v1_write" on tenant_collections;
 create policy "tenant_collections_v1_write" on tenant_collections for all using (true) with check (true);
 
-create table if not exists reconciliation_runs (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid,
-  period_month date not null,
-  total_credit numeric(12,2) not null default 0,
-  total_debit numeric(12,2) not null default 0,
-  variance numeric(12,2) not null default 0,
-  status text not null default 'open' check (status in ('open','reconciled','locked')),
-  closed_at timestamptz,
-  created_at timestamptz not null default now()
-);
-alter table reconciliation_runs enable row level security;
-drop policy if exists "reconciliation_runs_v1_read" on reconciliation_runs;
-create policy "reconciliation_runs_v1_read" on reconciliation_runs for select using (true);
-drop policy if exists "reconciliation_runs_v1_write" on reconciliation_runs;
-create policy "reconciliation_runs_v1_write" on reconciliation_runs for all using (true) with check (true);
-
--- SEED DEMO DATA
-insert into vendors (name, account_no) values ('ABC Suppliers','100200300'), ('City Power Co','100200301'), ('WaterWorks Ltd','100200302') on conflict do nothing;
-insert into tenants (name, expected_monthly) values ('Greenfield Retail','5000.00'), ('Sunrise Cafe','3200.00'), ('TechHub Office','8000.00') on conflict do nothing;
-insert into reconciliation_runs (period_month, total_credit, total_debit, variance, status) values ('2024-05-01','16200.00','12500.00','0.00','open') on conflict do nothing;
-insert into bank_transactions (txn_date, amount, direction, description, status) values ('2024-05-03','5000.00','credit','Greenfield Retail rent','matched'),('2024-05-05','3200.00','credit','Sunrise Cafe rent','matched'),('2024-05-07','8000.00','credit','TechHub Office rent','matched'),('2024-05-10','4500.00','debit','ABC Suppliers INV-223','cleared'),('2024-05-12','3000.00','debit','City Power Co','cleared'),('2024-05-15','5000.00','debit','WaterWorks Ltd','unmatched') on conflict do nothing;
-insert into vendor_payments (vendor_id, amount, payment_date, reference, status) values ((select id from vendors where name='ABC Suppliers'),'4500.00','2024-05-10','INV-223','cleared'),((select id from vendors where name='City Power Co'),'3000.00','2024-05-12','MAY-POW','cleared'),((select id from vendors where name='WaterWorks Ltd'),'5000.00','2024-05-15','INV-118','outstanding') on conflict do nothing;
-insert into tenant_collections (tenant_id, amount, collection_date, source, matched, status) values ((select id from tenants where name='Greenfield Retail'),'5000.00','2024-05-03','Bank transfer','5000.00','matched'),((select id from tenants where name='Sunrise Cafe'),'3200.00','2024-05-05','Cash','3200.00','matched'),((select id from tenants where name='TechHub Office'),'8000.00','2024-05-07','Cheque','8000.00','matched') on conflict do nothing;
+-- Stable IDs make this seed safe to apply again without duplicating demo rows.
+insert into vendors (id, name, account_no) values
+('10000000-0000-4000-8000-000000000001','ABC Suppliers','100200300'),
+('10000000-0000-4000-8000-000000000002','City Power Co','100200301'),
+('10000000-0000-4000-8000-000000000003','WaterWorks Ltd','100200302') on conflict (id) do nothing;
+insert into tenants (id, name, expected_monthly) values
+('20000000-0000-4000-8000-000000000001','Greenfield Retail',5000),
+('20000000-0000-4000-8000-000000000002','Sunrise Cafe',3200),
+('20000000-0000-4000-8000-000000000003','TechHub Office',8000) on conflict (id) do nothing;
+insert into reconciliation_runs (id, period_month, total_credit, total_debit, variance) values
+('30000000-0000-4000-8000-000000000001','2024-05-01',16200,12500,0) on conflict (id) do nothing;
+insert into bank_transactions (id, run_id, txn_date, amount, direction, description) values
+('40000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001','2024-05-03',5000,'credit','Greenfield Retail rent'),
+('40000000-0000-4000-8000-000000000002','30000000-0000-4000-8000-000000000001','2024-05-05',3200,'credit','Sunrise Cafe rent'),
+('40000000-0000-4000-8000-000000000003','30000000-0000-4000-8000-000000000001','2024-05-07',8000,'credit','TechHub Office rent'),
+('40000000-0000-4000-8000-000000000004','30000000-0000-4000-8000-000000000001','2024-05-10',4500,'debit','ABC Suppliers INV-223'),
+('40000000-0000-4000-8000-000000000005','30000000-0000-4000-8000-000000000001','2024-05-12',3000,'debit','City Power Co'),
+('40000000-0000-4000-8000-000000000006','30000000-0000-4000-8000-000000000001','2024-05-15',5000,'debit','WaterWorks Ltd') on conflict (id) do nothing;
+insert into vendor_payments (id, vendor_id, run_id, amount, payment_date, reference) values
+('50000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001',4500,'2024-05-10','INV-223'),
+('50000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000002','30000000-0000-4000-8000-000000000001',3000,'2024-05-12','MAY-POW'),
+('50000000-0000-4000-8000-000000000003','10000000-0000-4000-8000-000000000003','30000000-0000-4000-8000-000000000001',5000,'2024-05-15','INV-118') on conflict (id) do nothing;
+insert into tenant_collections (id, tenant_id, run_id, amount, collection_date, source) values
+('60000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000001',5000,'2024-05-03','Bank transfer'),
+('60000000-0000-4000-8000-000000000002','20000000-0000-4000-8000-000000000002','30000000-0000-4000-8000-000000000001',3200,'2024-05-05','Cash'),
+('60000000-0000-4000-8000-000000000003','20000000-0000-4000-8000-000000000003','30000000-0000-4000-8000-000000000001',8000,'2024-05-07','Cheque') on conflict (id) do nothing;
+commit;
